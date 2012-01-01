@@ -8,7 +8,7 @@ class Article < Content
   extend ActiveSupport::Memoizable
   serialize :settings, Hash
 
-  content_fields :body, :extended
+  content_fields :body, :extended, :excerpt
 
   validates_uniqueness_of :guid
   validates_presence_of :title
@@ -415,8 +415,16 @@ class Article < Content
     self[:extended]
   end
 
+  def excerpt=(newval)
+    if self[:excerpt] != newval
+      changed if published?
+      self[:excerpt] = newval
+    end
+    self[:excerpt]
+  end
+
   def self.html_map(field=nil)
-    html_map = { :body => true, :extended => true }
+    html_map = { :body => true, :extended => true, :excerpt => true }
     if field
       html_map[field.to_sym]
     else
