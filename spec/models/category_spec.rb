@@ -23,41 +23,19 @@ describe "Category" do
     c.articles.size.should == 2
     c.published_articles.size.should == 1
   end
-end
-
-describe 'Given the fixtures' do
-  it 'find gets the order right' do
-    cats = [Factory.create(:category, :id => 2, :position => 1),
-            Factory.create(:category, :id => 3, :position => 2),
-            Factory.create(:category, :id => 1, :position => 3)]
-    cats.should == cats.sort_by { |c| c.position }
-    Category.reorder(cats.reverse.collect { |c| c.id })
-    Category.all.should == cats.reverse
+  
+  it "empty permalink should be converted" do
+    Factory(:blog)
+    c = Category.create(:name => "test 1")
+    c.permalink.should == "test-1"
   end
-
-  it 'can still override order in find' do
-    cats = [Factory.create(:category, :id => 2, :name => 'c', :position => 1),
-            Factory.create(:category, :id => 3, :name => 'a', :position => 2),
-            Factory.create(:category, :id => 1, :name => 'b', :position => 3)]
-    cats = Category.send(:with_exclusive_scope) do
-      Category.all(:order => 'name ASC')
-    end
-    cats.should == cats.sort_by {|c| c.name}
-    Category.all.should_not == cats
+  
+  it "category with permalink should not have permalink generated" do
+    Factory(:blog)
+    c = Category.create(:name => "Test 2", :permalink => "yeah-nice-one")
+    c.permalink.should == "yeah-nice-one"
   end
-
-  it '.reorder_alpha puts categories in alphabetical order' do
-    cats = [Factory.create(:category, :id => 2, :name => 'c', :position => 1),
-            Factory.create(:category, :id => 3, :name => 'a', :position => 2),
-            Factory.create(:category, :id => 1, :name => 'b', :position => 3)]
-    Category.all.should_not == Category.send(:with_exclusive_scope) do
-      Category.all(:order => :name)
-    end
-    Category.reorder_alpha
-    Category.all.should == Category.send(:with_exclusive_scope) do
-      Category.all(:order => :name)
-    end
-  end
+  
 end
 
 describe Category do

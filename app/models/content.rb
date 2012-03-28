@@ -42,7 +42,7 @@ class Content < ActiveRecord::Base
   scope :published, {:conditions => ['published = ?', true]}
   scope :not_published, {:conditions => ['published = ?', false]}
   scope :draft, {:conditions => ['state = ?', 'draft']}
-  scope :no_draft, {:conditions => ['state <> ?', 'draft'], :order => 'created_at DESC'}
+  scope :no_draft, {:conditions => ['state <> ?', 'draft'], :order => 'published_at DESC'}
   scope :searchstring, lambda {|search_string|
     tokens = search_string.split(' ').collect {|c| "%#{c.downcase}%"}
     {:conditions => ['state = ? AND ' + (['(LOWER(body) LIKE ? OR LOWER(extended) LIKE ? OR LOWER(title) LIKE ?)']*tokens.size).join(' AND '),
@@ -62,9 +62,6 @@ class Content < ActiveRecord::Base
 
   include Stateful
 
-  @@content_fields = Hash.new
-  @@html_map       = Hash.new
-
   def invalidates_cache?(on_destruction = false)
     @invalidates_cache ||= if on_destruction
       just_changed_published_status? || published?
@@ -72,41 +69,28 @@ class Content < ActiveRecord::Base
       (changed? && published?) || just_changed_published_status?
     end
   end
-
-  class << self
-    # FIXME: Quite a bit of this isn't needed anymore.
-    def content_fields(*attribs)
-      @@content_fields[self] = ((@@content_fields[self]||[]) + attribs).uniq
-      @@html_map[self] = nil
-      attribs.each do | field |
-        define_method("#{field}=") do | newval |
-          if self[field] != newval
-            changed
-            self[field] = newval
-          end
-          self[field]
-        end
-        unless self.method_defined?("#{field}_html")
-          define_method("#{field}_html") do
-            html(field.to_sym)
-          end
-        end
-      end
+  
+  def shorten_url
+    return unless self.published
+    
+    r = Redirect.new
+    r.from_path = r.shorten
+    r.to_path = self.permalink_url
+    
+    # This because updating self.redirects.first raises ActiveRecord::ReadOnlyRecord
+    unless (red = self.redirects.first).nil?
+      return if red.to_path == self.permalink_url
+      r.from_path = red.from_path
+      red.destroy
+      self.redirects.clear # not sure we need this one
     end
 
-    def html_map(field=nil)
-      unless @@html_map[self]
-        @@html_map[self] = Hash.new
-        instance = self.new
-        @@content_fields[self].each do |attrib|
-          @@html_map[self][attrib] = true
-        end
-      end
-      if field
-        @@html_map[self][field]
-      else
-        @@html_map[self]
-      end
+    self.redirects << r
+  end
+
+  class << self
+    def content_fields *attribs
+      class_eval "def content_fields; #{attribs.inspect}; end"
     end
 
     def find_published(what = :all, options = {})
@@ -193,24 +177,15 @@ class Content < ActiveRecord::Base
     end
   end
 
-  def content_fields
-    @@content_fields[self.class]
+  def html_map field
+    content_fields.include? field
   end
 
-  def html_map(field=nil)
-    self.class.html_map(field)
-  end
-
-  def cache_key(field)
-    id ? "contents_html/#{id}/#{field}" : nil
-  end
-
-  # Return HTML for some part of this object.  It will be fetched from the
-  # cache if possible, or regenerated if needed.
+  # Return HTML for some part of this object.
   def html(field = :all)
     if field == :all
       generate_html(:all, content_fields.map{|f| self[f].to_s}.join("\n\n"))
-    elsif self.class.html_map(field)
+    elsif html_map(field)
       generate_html(field)
     else
       raise "Unknown field: #{field.inspect} in content.html"
@@ -218,8 +193,7 @@ class Content < ActiveRecord::Base
   end
 
   # Generate HTML for a specific field using the text_filter in use for this
-  # object.  The HTML is cached in the fragment cache, using the +ContentCache+
-  # object in @@cache.
+  # object.
   def generate_html(field, text = nil)
     text ||= self[field].to_s
     html = text_filter.filter_text_for_content(blog, text, self) || text
@@ -253,23 +227,8 @@ class Content < ActiveRecord::Base
   end
 
   # Set the text filter for this object.
-  def text_filter=(filter)
-    filter.to_text_filter.tap do |tf|
-      if tf.id != text_filter_id
-        changed if !new_record? && published?
-      end
-      self.text_filter_id = tf.id
-    end
-  end
-
-  # Changing the title flags the object as changed
-  def title=(new_title)
-    if new_title == self[:title]
-      self[:title]
-    else
-      changed if !new_record? && published?
-      self[:title] = new_title
-    end
+  def text_filter= filter
+    self.text_filter_id = filter.to_text_filter.id
   end
 
   def blog
@@ -321,7 +280,7 @@ class Content < ActiveRecord::Base
   def short_url
     # Double check because of crappy data in my own old database
     return unless self.published and self.redirects.count > 0
-    blog.url_for(redirects.first.from_path, :only_path => false)
+    blog.url_for(redirects.last.from_path, :only_path => false)
   end
 
 end

@@ -13,7 +13,7 @@ with_each_theme do |theme, view_path|
         2.times {Factory(:article, :body => 'body')}
         @controller.action_name = "index"
         @controller.request.path_parameters["controller"] = "articles"
-        assign(:articles, Article.paginate(:all, :page => 1, :per_page => 4))
+        assign(:articles, Article.page(1).per(4))
 
         render
       end
@@ -34,6 +34,15 @@ with_each_theme do |theme, view_path|
         should_not =~ /&gt;/
         should_not =~ /&amp;/
       end
+
+      it "renders the regular article partial twice" do
+        view.should render_template(:partial => "articles/_article_content",
+                                    :count => 2)
+      end
+
+      it "does not render any password forms" do
+        view.should_not render_template(:partial => "articles/_password_form")
+      end
     end
 
     context "without search, on page 2" do
@@ -42,7 +51,7 @@ with_each_theme do |theme, view_path|
         3.times { Factory(:article) }
         @controller.action_name = "index"
         @controller.request.path_parameters["controller"] = "articles"
-        assign(:articles, Article.paginate(:all, :page => 2, :per_page => 2))
+        assign(:articles, Article.page(2).per(2))
 
         render
       end
@@ -54,7 +63,7 @@ with_each_theme do |theme, view_path|
       end
 
       it "should have pagination link to page 1" do
-        should have_selector("a", :href=> "/page/1")
+        should have_selector("a", :href=> "/")
       end
     end
 
@@ -67,7 +76,7 @@ with_each_theme do |theme, view_path|
         params[:q]           = "body"
         params[:page]        = 2
         params[:action]      = 'search'
-        assign(:articles, Blog.default.articles_matching(params[:q], :page => 2, :per_page => 2))
+        assign(:articles, Blog.default.articles_matching(params[:q], {:page => params[:page], :per => 1}))
 
         render
       end
@@ -77,7 +86,7 @@ with_each_theme do |theme, view_path|
       end
 
       it "should have pagination link to search page 1" do
-        rendered.should have_selector("a", :href => "/search/body/page/1")
+        rendered.should have_selector("a", :href => "/search/body")
       end
     end
   end

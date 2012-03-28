@@ -13,7 +13,8 @@ class Admin::ContentController < Admin::BaseController
 
   def index
     @search = params[:search] ? params[:search] : {}
-    @articles = Article.search_no_draft_paginate(@search, :page => params[:page], :per_page => this_blog.admin_display_elements)
+    
+    @articles = Article.search_with_pagination(@search, {:page => params[:page], :per_page => this_blog.admin_display_elements})
 
     if request.xhr?
       render :partial => 'article_list', :locals => { :articles => @articles }
@@ -37,20 +38,18 @@ class Admin::ContentController < Admin::BaseController
   end
 
   def destroy
-    @article = Article.find(params[:id])
+    @record = Article.find(params[:id])
 
-    unless @article.access_by?(current_user)
-      redirect_to :action => 'index'
+    unless @record.access_by?(current_user)
       flash[:error] = _("Error, you are not allowed to perform this action")
-      return
+      return(redirect_to :action => 'index')
     end
+    
+    return(render 'admin/shared/destroy') unless request.post?
 
-    if request.post?
-      @article.destroy
-      flash[:notice] = _("This article was deleted successfully")
-      redirect_to :action => 'index'
-      return
-    end
+    @record.destroy
+    flash[:notice] = _("This article was deleted successfully")
+    redirect_to :action => 'index'
   end
 
   def insert_editor
@@ -92,17 +91,8 @@ class Admin::ContentController < Admin::BaseController
     @article = Article.get_or_build_article(id)
     @article.text_filter = current_user.text_filter if current_user.simple_editor?
 
-    # This is ugly, but I have to check whether or not the article is
-    # published to create the dummy draft I'll replace later so that the
-    # published article doesn't get overriden on the front
-    if @article.published
-      parent_id = @article.id
-      @article = Article.drafts.child_of(parent_id).first || Article.new
-      @article.allow_comments = this_blog.default_allow_comments
-      @article.allow_pings    = this_blog.default_allow_pings
-      @article.parent_id      = parent_id
-    end
-
+    get_fresh_or_existing_draft_for_article
+    
     @article.attributes = params[:article]
     @article.published = false
     set_article_author
@@ -114,8 +104,8 @@ class Admin::ContentController < Admin::BaseController
     if @article.save
       render(:update) do |page|
         page.replace_html('autosave', hidden_field_tag('article[id]', @article.id))
-        page.replace_html('permalink', text_field('article', 'permalink', {:class => 'small medium'}))
-        page.replace_html('preview_link', link_to(_("Preview"), {:controller => '/articles', :action => 'preview', :id => @article.id}, {:target => 'new'}))
+        page.replace_html('preview_link', link_to(_("Preview"), {:controller => '/articles', :action => 'preview', :id => @article.id}, {:target => 'new', :class => 'btn info'}))
+        page.replace_html('destroy_link', link_to_destroy_draft(@article))
       end
 
       return true
@@ -124,6 +114,16 @@ class Admin::ContentController < Admin::BaseController
   end
 
   protected
+
+  def get_fresh_or_existing_draft_for_article
+    if @article.published and @article.id
+      parent_id = @article.id
+      @article = Article.drafts.child_of(parent_id).first || Article.new
+      @article.allow_comments = this_blog.default_allow_comments
+      @article.allow_pings    = this_blog.default_allow_pings
+      @article.parent_id      = parent_id
+    end
+  end
 
   attr_accessor :resources, :categories, :resource, :category
 
@@ -148,14 +148,7 @@ class Admin::ContentController < Admin::BaseController
     @post_types = PostType.find(:all)
     if request.post?
       if params[:article][:draft]
-        # XXX: Straight copy from autosave. Refactor!
-        if @article.published
-          parent_id = @article.id
-          @article = Article.drafts.child_of(parent_id).first || Article.new
-          @article.allow_comments = this_blog.default_allow_comments
-          @article.allow_pings    = this_blog.default_allow_pings
-          @article.parent_id      = parent_id
-        end
+        get_fresh_or_existing_draft_for_article
       else
         if not @article.parent_id.nil?
           @article = Article.find(@article.parent_id)
@@ -163,28 +156,28 @@ class Admin::ContentController < Admin::BaseController
       end
     end
 
-    @article.published = true
     @article.keywords = Tag.collection_to_string @article.tags
     @article.attributes = params[:article]
     # TODO: Consider refactoring, because double rescue looks... weird.
+        
     @article.published_at = DateTime.strptime(params[:article][:published_at], "%B %e, %Y %I:%M %p GMT%z").utc rescue Time.parse(params[:article][:published_at]).utc rescue nil
 
     if request.post?
       set_article_author
       save_attachments
+      
       @article.state = "draft" if @article.draft
 
       if @article.save
         destroy_the_draft unless @article.draft
         set_article_categories
-        set_shortened_url if @article.published
         set_the_flash
         redirect_to :action => 'index'
         return
       end
     end
 
-    @images = Resource.images_by_created_at.paginate(:page => params[:page], :per_page => 10)
+    @images = Resource.images_by_created_at.page(params[:page]).per(10)
     @resources = Resource.without_images_by_filename
     @macros = TextFilter.macro_filters
     render 'new'
@@ -216,9 +209,6 @@ class Admin::ContentController < Admin::BaseController
       lastid = Article.find(:first, :order => 'id DESC').id
       @article.title = "Draft article " + lastid.to_s
     end
-    unless @article.parent_id and Article.find(@article.parent_id).published
-      @article.permalink = @article.stripped_title
-    end
   end
 
   def save_attachments
@@ -236,19 +226,6 @@ class Admin::ContentController < Admin::BaseController
         @article.categories << cat
       end
     end
-  end
-
-  def set_shortened_url
-    # In a very short time, I'd like to have permalink modification generate a 301 redirect as well to
-    # So I set this up the big way now
-
-    return unless Redirect.find_by_to_path(@article.permalink_url).nil?
-
-    red = Redirect.new
-    red.from_path = red.shorten
-    red.to_path = @article.permalink_url
-    red.save
-    @article.redirects << red
   end
 
   def def_build_body

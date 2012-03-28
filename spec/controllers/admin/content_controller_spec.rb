@@ -1,4 +1,4 @@
-require 'spec_helper'
+ require 'spec_helper'
 
 describe Admin::ContentController do
   render_views
@@ -30,6 +30,53 @@ describe Admin::ContentController do
       get :index, :search => {:searchstring => 'originally', :published_at => '2008-08'}
       assigns(:articles).should be_empty
       response.should render_template('index')
+      response.should be_success
+    end
+
+    it 'should restrict to drafts' do
+      article = Factory(:article, :state => 'draft')
+      get :index, :search => {:state => 'drafts'}
+      assigns(:articles).should == [article]
+      response.should render_template('index')
+      response.should be_success
+    end
+
+    it 'should restrict to publication pending articles' do
+      article = Factory(:article, :state => 'publication_pending', :published_at => '2020-01-01')
+      get :index, :search => {:state => 'pending'}
+      assigns(:articles).should == [article]
+      response.should render_template('index')
+      response.should be_success
+    end
+    
+    it 'should restrict to withdrawn articles' do
+      article = Factory(:article, :state => 'withdrawn', :published_at => '2010-01-01')
+      get :index, :search => {:state => 'withdrawn'}
+      assigns(:articles).should == [article]
+      response.should render_template('index')
+      response.should be_success
+    end
+  
+    it 'should restrict to withdrawn articles' do
+      article = Factory(:article, :state => 'withdrawn', :published_at => '2010-01-01')
+      get :index, :search => {:state => 'withdrawn'}
+      assigns(:articles).should == [article]
+      response.should render_template('index')
+      response.should be_success
+    end
+
+    it 'should restrict to published articles' do
+      article = Factory(:article, :state => 'published', :published_at => '2010-01-01')
+      get :index, :search => {:state => 'published'}
+      response.should render_template('index')
+      response.should be_success
+    end
+
+    it 'should fallback to default behavior' do
+      article = Factory(:article, :state => 'draft')
+      get :index, :search => {:state => '3vI1 1337 h4x0r'}
+      response.should render_template('index')
+      assigns(:articles).should_not == [article]
       response.should be_success
     end
 
@@ -117,6 +164,18 @@ describe Admin::ContentController do
         result.parent_id.should == @article.id
         result.permalink.should == @article.permalink
         result.redirects.count.should == 0
+      end
+    end
+
+    describe "with an unrelated draft in the database" do
+      before do
+        @draft = Factory(:article, :state => 'draft')
+      end
+
+      it "leaves the original draft in existence" do
+        post :autosave, 'article' => {}
+        assigns(:article).id.should_not == @draft.id
+        Article.find(@draft.id).should_not be_nil
       end
     end
   end
@@ -277,11 +336,11 @@ describe Admin::ContentController do
     end
 
     it 'should create a filtered article' do
+      Article.delete_all
       body = "body via *markdown*"
       extended="*foo*"
       post :new, 'article' => { :title => "another test", :body => body, :extended => extended}
-      assert_response :redirect, :action => 'show'
-
+      assert_response :redirect, :action => 'index'
       new_article = Article.find(:first, :order => "created_at DESC")
       assert_equal body, new_article.body
       assert_equal extended, new_article.extended
@@ -357,6 +416,22 @@ describe Admin::ContentController do
         draft = Article.child_of(@orig.id).first
         draft.parent_id.should == @orig.id
         draft.should_not be_published
+      end
+    end
+
+    describe "with an unrelated draft in the database" do
+      before do
+        @draft = Factory(:article, :state => 'draft')
+      end
+
+      describe "saving new article as draft" do
+        it "leaves the original draft in existence" do
+          post(
+            :new,
+            'article' => base_article({:draft => 'save as draft'}))
+          assigns(:article).id.should_not == @draft.id
+          Article.find(@draft.id).should_not be_nil
+        end
       end
     end
   end
@@ -516,19 +591,19 @@ describe Admin::ContentController do
       it 'should return foo for keywords fo' do
         get :auto_complete_for_article_keywords, :article => {:keywords => 'fo'}
         response.should be_success
-        response.body.should == '<ul><li>foo</li></ul>'
+        response.body.should == '<ul class="unstyled" id="autocomplete"><li>foo</li></ul>'
       end
 
       it 'should return nothing for hello' do
         get :auto_complete_for_article_keywords, :article => {:keywords => 'hello'}
         response.should be_success
-        response.body.should == '<ul></ul>'
+        response.body.should == '<ul class="unstyled" id="autocomplete"></ul>'
       end
 
       it 'should return bar and bazz for ba keyword' do
         get :auto_complete_for_article_keywords, :article => {:keywords => 'ba'}
         response.should be_success
-        response.body.should == '<ul><li>bar</li><li>bazz</li></ul>'
+        response.body.should == '<ul class="unstyled" id="autocomplete"><li>bar</li><li>bazz</li></ul>'
       end
     end
 

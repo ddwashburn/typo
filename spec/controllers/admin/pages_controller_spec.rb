@@ -27,17 +27,6 @@ describe Admin::PagesController do
       assert_not_nil assigns(:pages)
     end
 
-    it 'should have Pages tab selected' do
-      get :index
-      test_tabs "Pages"
-    end
-
-    it 'should have Pages and Add new subtabs with Pages selected' do
-      get :index
-      subtabs = ["Pages", "Add new"]
-      test_subtabs(subtabs, "Pages")
-    end        
-    
   end
 
   describe "new" do
@@ -59,15 +48,6 @@ describe Admin::PagesController do
 
       it "should have a text filter" do
         assert_equal TextFilter.find_by_name(@blog.text_filter), assigns(:page).text_filter
-      end
-
-      it 'should have Pages tab selected' do
-        test_tabs "Pages"
-      end
-
-      it 'should have Pages and Add new with no tab selected' do
-        subtabs = ["Pages", "Add new"]
-        test_subtabs(subtabs, "Add new")
       end
     end
 
@@ -100,14 +80,6 @@ describe Admin::PagesController do
       assert_equal @page, assigns(:page)
     end
 
-    it 'should have Pages tab selected' do
-      test_tabs "Pages"
-    end
-
-    it 'should have Pages and Add new with no tab selected' do
-      subtabs = ["Pages", "Add new"]
-      test_subtabs(subtabs, "")
-    end
   end
 
   it 'test_update' do
@@ -133,14 +105,6 @@ describe Admin::PagesController do
       :body => "A good body",
       :name => "posted-via-tests",
       :published => true }.merge(options)
-  end
-
-  #TODO but this kind of action must move to model !
-  it "should use satanize title to set page name" do
-    page = Factory.build(:page, :name => '')
-    page.should_receive(:satanized_title).and_return('title-with-accents-eea') 
-    Page.should_receive(:new).and_return(page)
-    post :new, :page => {:title => 'title with accents éèà'}
   end
 
   it 'should create a published page with a redirect' do
@@ -175,7 +139,4 @@ describe Admin::PagesController do
       response.should render_template('_visual_editor')
     end
   end
-
-
-
 end

@@ -5,7 +5,7 @@ require 'net/http'
 class Article < Content
   include TypoGuid
   include ConfigManager
-  extend ActiveSupport::Memoizable
+
   serialize :settings, Hash
 
   content_fields :body, :extended, :excerpt
@@ -47,15 +47,16 @@ class Article < Content
 
   before_create :set_defaults, :create_guid
   after_create :add_notifications
-  before_save :set_published_at
-  after_save :post_trigger
-  after_save :keywords_to_tags
+  before_save :set_published_at, :ensure_settings_type, :set_permalink
+  after_save :post_trigger, :keywords_to_tags, :shorten_url
 
   scope :category, lambda {|category_id| {:conditions => ['categorizations.category_id = ?', category_id], :include => 'categorizations'}}
-  scope :drafts, :conditions => ['state = ?', 'draft']
+  scope :drafts, lambda { { :conditions => { :state => 'draft' }, :order => 'created_at DESC' } }
   scope :without_parent, {:conditions => {:parent_id => nil}}
   scope :child_of, lambda { |article_id| {:conditions => {:parent_id => article_id}} }
   scope :published, lambda { { :conditions => { :published => true, :published_at => Time.at(0)..Time.now }, :order => 'published_at DESC' } }
+  scope :pending, lambda { { :conditions => ['state = ? and published_at > ?', 'publication_pending', Time.now], :order => 'published_at DESC' } }
+  scope :withdrawn, lambda { { :conditions => { :state => 'withdrawn' }, :order => 'published_at DESC' } }
   scope :published_at, lambda {|time_params| { :conditions => { :published => true, :published_at => Article.time_delta(*time_params) }, :order => 'published_at DESC' } }
 
   setting :password,                   :string, ''
@@ -68,6 +69,11 @@ class Article < Content
     rescue Exception => e
       self.settings = {}
     end
+  end
+
+  def set_permalink
+    return if self.state == 'draft'
+    self.permalink = self.title.to_permalink if self.permalink.nil? or self.permalink.empty?
   end
 
   def has_child?
@@ -97,38 +103,23 @@ class Article < Content
       article
     end
 
-    def search_no_draft_paginate(search_hash, paginate_hash)
-      list_function  = ["Article.no_draft"] + function_search_no_draft(search_hash)
+    def search_with_pagination(search_hash, paginate_hash)
+      
+      state = (search_hash[:state] and ["no_draft", "drafts", "published", "withdrawn", "pending"].include? search_hash[:state]) ? search_hash[:state] : 'no_draft'
+      
+      
+      list_function  = ["Article.#{state}"] + function_search_no_draft(search_hash)
 
       if search_hash[:category] and search_hash[:category].to_i > 0
         list_function << 'category(search_hash[:category])'
       end
 
-      paginate_hash[:order] = 'published_at DESC'
-      list_function << "paginate(paginate_hash)"
+      list_function << "page(paginate_hash[:page])"
+      list_function << "per(paginate_hash[:per_page])"
+
       eval(list_function.join('.'))
     end
 
-  end
-
-  accents = { ['á','à','â','ä','ã','Ã','Ä','Â','À'] => 'a',
-    ['é','è','ê','ë','Ë','É','È','Ê'] => 'e',
-    ['í','ì','î','ï','I','Î','Ì'] => 'i',
-    ['ó','ò','ô','ö','õ','Õ','Ö','Ô','Ò'] => 'o',
-    ['œ'] => 'oe',
-    ['ß'] => 'ss',
-    ['ú','ù','û','ü','U','Û','Ù'] => 'u',
-    ['ç','Ç'] => 'c'
-  }
-
-  FROM, TO = accents.inject(['','']) { |o,(k,v)|
-    o[0] << k * '';
-    o[1] << v * k.size
-    o
-  }
-
-  def stripped_title
-    self.title.tr(FROM, TO).gsub(/<[^>]*>/, '').to_url
   end
 
   def year_url
@@ -293,6 +284,8 @@ class Article < Content
       art.allow_comments = art.blog.default_allow_comments
       art.allow_pings = art.blog.default_allow_pings
       art.text_filter = art.blog.text_filter
+      art.old_permalink = art.permalink_url unless art.permalink.nil? or art.permalink.empty?
+      art.published = true
     end
   end
 
@@ -330,7 +323,7 @@ class Article < Content
     if !query_s.empty? && args.empty?
       Article.searchstring(query)
     elsif !query_s.empty? && !args.empty?
-      Article.searchstring(query).paginate(args)
+      Article.searchstring(query).page(args[:page]).per(args[:per])
     else
       []
     end
@@ -380,60 +373,8 @@ class Article < Content
     state.published = cast_to_boolean(newval)
   end
 
-  # FIXME: Bloody rails reloading. Nasty workaround.
-  def allow_comments=(newval)
-    cast_to_boolean(newval).tap do |val|
-      if self[:allow_comments] != val
-        changed if published?
-        self[:allow_comments] = val
-      end
-    end
-  end
-
-  def allow_pings=(newval)
-    cast_to_boolean(newval).tap do |val|
-      if self[:allow_pings] != val
-        changed if published?
-        self[:allow_pings] = val
-      end
-    end
-  end
-
-  def body=(newval)
-    if self[:body] != newval
-      changed if published?
-      self[:body] = newval
-    end
-    self[:body]
-  end
-
-  def extended=(newval)
-    if self[:extended] != newval
-      changed if published?
-      self[:extended] = newval
-    end
-    self[:extended]
-  end
-
-  def excerpt=(newval)
-    if self[:excerpt] != newval
-      changed if published?
-      self[:excerpt] = newval
-    end
-    self[:excerpt]
-  end
-
-  def self.html_map(field=nil)
-    html_map = { :body => true, :extended => true, :excerpt => true }
-    if field
-      html_map[field.to_sym]
-    else
-      html_map
-    end
-  end
-
   def content_fields
-    [:body, :extended]
+    [:body, :extended, :excerpt]
   end
 
   # The web interface no longer distinguishes between separate "body" and
@@ -483,13 +424,20 @@ class Article < Content
     end
   end
 
+  def ensure_settings_type
+    if settings.is_a?(String)
+      # Any dump access forcing de-serialization
+      password.blank?
+    end
+  end
+
   def set_defaults
     if self.attributes.include?("permalink") and
       (self.permalink.blank? or
        self.permalink.to_s =~ /article-draft/ or
        self.state == "draft"
       )
-      self.permalink = self.stripped_title
+      set_permalink
     end
     if blog && self.allow_comments.nil?
       self.allow_comments = blog.default_allow_comments
