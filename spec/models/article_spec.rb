@@ -4,12 +4,7 @@ require 'spec_helper'
 describe Article do
 
   before do
-    @blog = stub_model(Blog)
-    @blog.stub(:base_url) { "http://myblog.net" }
-    @blog.stub(:text_filter) { "textile" }
-    @blog.stub(:send_outbound_pings) { false }
-
-    Blog.stub(:default) { @blog }
+    @blog = build_stubbed :blog
 
     @articles = []
   end
@@ -618,6 +613,7 @@ describe Article do
           @article.allow_pings.should be == @blog.default_allow_pings
         end
         it "should have default text filter" do
+          @article.text_filter_id.should be_nil
           @article.text_filter.should be == @blog.text_filter_object
         end
       end
@@ -632,5 +628,49 @@ describe Article do
     end
 
   end
-end
 
+  describe "#published_comments" do
+    it 'should not include withdrawn comments' do
+      a = Article.new(:title => 'foo')
+      a.save!
+
+      assert_equal 0, a.published_comments.size
+      c = a.comments.build(:body => 'foo', :author => 'bob', :published => true, :published_at => Time.now)
+      assert c.published?
+      c.save!
+      a.reload
+
+      assert_equal 1, a.published_comments.size
+      c.withdraw!
+      assert_equal 0, a.published_comments.size
+    end
+  end
+
+  describe "save_attachments!" do
+    it "calls save_attachment for each file given" do
+      first_file = OpenStruct.new
+      second_file = OpenStruct.new
+      hash = {a_key: first_file, a_second_key: second_file}
+      article = FactoryGirl.build(:article)
+      article.should_receive(:save_attachment!).with(first_file)
+      article.should_receive(:save_attachment!).with(second_file)
+      article.save_attachments!(hash)
+    end
+
+    it "do nothing with nil given" do
+      article = FactoryGirl.build(:article)
+      article.save_attachments!(nil)
+    end
+  end
+
+  describe "save_attachment!" do
+    it "calls resource create_and_upload and add this new resource" do
+      resource = FactoryGirl.build(:resource)
+      file = OpenStruct.new
+      article = FactoryGirl.create(:article)
+      Resource.should_receive(:create_and_upload).with(file).and_return(resource)
+      article.save_attachment!(file).reload
+      article.resources.should eq [resource]
+    end
+  end
+end

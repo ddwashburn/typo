@@ -75,6 +75,11 @@ class Article < Content
     self.permalink = self.title.to_permalink if self.permalink.nil? or self.permalink.empty?
   end
 
+  def set_author(user)
+    self.author = user.login
+    self.user = user
+  end
+
   def has_child?
     Article.exists?({:parent_id => self.id})
   end
@@ -157,21 +162,15 @@ class Article < Content
       blog.url_for(permalink_url_options, :anchor => anchor, :only_path => only_path)
   end
 
-  def param_array
-    @param_array ||=
-      [published_at.year,
-                 sprintf('%.2d', published_at.month),
-                 sprintf('%.2d', published_at.day),
-                 permalink].tap \
-      do |params|
-        this = self
-        k = class << params; self; end
-        k.send(:define_method, :to_s) { params[-1] }
-      end
+  def save_attachments!(files)
+    files ||= {}
+    files.values.each { |f| self.save_attachment!(f) }
   end
 
-  def to_param
-    param_array
+  def save_attachment!(file)
+    self.resources << Resource.create_and_upload(file)
+  rescue => e
+    logger.info(e.message)
   end
 
   def trackback_url
@@ -198,7 +197,7 @@ class Article < Content
     blog.url_for("comments/preview?article_id=#{self.id}", :only_path => false)
   end
 
-  def feed_url(format = :rss20)
+  def feed_url(format = :rss)
     format_extension = format.to_s.gsub(/\d/,'')
     permalink_url + ".#{format_extension}"
   end
@@ -267,7 +266,7 @@ class Article < Content
   def self.count_by_date(year, month = nil, day = nil, limit = nil)
     if !year.blank?
       count(:conditions => { :published_at => time_delta(year, month, day),
-              :published => true })
+                             :published => true })
     else
       count(:conditions => { :published => true })
     end
@@ -282,7 +281,6 @@ class Article < Content
     article = Article.new.tap do |art|
       art.allow_comments = art.blog.default_allow_comments
       art.allow_pings = art.blog.default_allow_pings
-      art.text_filter = art.blog.text_filter
       art.old_permalink = art.permalink_url unless art.permalink.nil? or art.permalink.empty?
       art.published = true
     end
